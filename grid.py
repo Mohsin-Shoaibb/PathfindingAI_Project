@@ -1,137 +1,145 @@
-import random
 from node import Node
+# 6-directional clockwise movement: Up, Right, Down, Bottom-Right, Left, Top-Left.
+# Top-Right (-1,+1) and Bottom-Left (+1,-1) are excluded per spec.
+DIRECTIONS = [
+    (-1,  0),   # Up
+    ( 0,  1),   # Right
+    ( 1,  0),   # Down
+    ( 1,  1),   # Bottom-Right (main diagonal)
+    ( 0, -1),   # Left
+    (-1, -1),   # Top-Left     (main diagonal)
+]
+
 
 class Grid:
-    """Manages the grid environment"""
-    def __init__(self, rows, cols, obstacle_probability=0.001):
+    """2-D grid of Node objects used by all search algorithms."""
+
+    def __init__(self, rows: int, cols: int):
         self.rows = rows
         self.cols = cols
-        self.obstacle_probability = obstacle_probability
-        self.grid = [[Node(r, c) for c in range(cols)] for r in range(rows)]
-        self.start = None
-        self.target = None
-        self.dynamic_obstacles = []
-        
-    def set_start(self, row, col):
-        """Set the start position"""
-        if self.start:
-            self.grid[self.start[0]][self.start[1]].node_type = 'empty'
-        self.start = (row, col)
-        self.grid[row][col].node_type = 'start'
-        self.grid[row][col].g_cost = 0
-        
-    def set_target(self, row, col):
-        """Set the target position"""
-        if self.target:
-            self.grid[self.target[0]][self.target[1]].node_type = 'empty'
-        self.target = (row, col)
-        self.grid[row][col].node_type = 'target'
-        
-    def set_wall(self, row, col):
-        """Set a wall at position"""
-        if (row, col) != self.start and (row, col) != self.target:
-            self.grid[row][col].node_type = 'wall'
-            
-    def remove_wall(self, row, col):
-        """Remove a wall at position"""
-        if self.grid[row][col].node_type == 'wall':
-            self.grid[row][col].node_type = 'empty'
-    
-    def spawn_dynamic_obstacle(self):
-        """Randomly spawn a dynamic obstacle"""
-        if random.random() < self.obstacle_probability:
-            # Find empty cells
-            empty_cells = []
-            for r in range(self.rows):
-                for c in range(self.cols):
-                    node = self.grid[r][c]
-                    if node.node_type == 'empty' and not node.visited and not node.in_frontier:
-                        empty_cells.append((r, c))
-            
-            if empty_cells:
-                r, c = random.choice(empty_cells)
-                self.grid[r][c].node_type = 'dynamic_obstacle'
-                self.dynamic_obstacles.append((r, c))
-                return (r, c)
-        return None
-    
-    def get_neighbors(self, node):
-        """Get valid neighbors in clockwise order with all diagonals"""
-        neighbors = []
-        r, c = node.row, node.col
-        
-        # Clockwise order with ALL diagonals:
-        # Up, Top-Right, Right, Bottom-Right, Bottom, Bottom-Left, Left, Top-Left
-        directions = [
-            (-1, 0),   # Up
-            (-1, 1),   # Top-Right
-            (0, 1),    # Right
-            (1, 1),    # Bottom-Right
-            (1, 0),    # Bottom
-            (1, -1),   # Bottom-Left
-            (0, -1),   # Left
-            (-1, -1)   # Top-Left
+        self._cells: list[list[Node]] = [
+            [Node(r, c) for c in range(cols)] for r in range(rows)
         ]
-        
-        for dr, dc in directions:
-            new_r, new_c = r + dr, c + dc
-            
-            # Check bounds
-            if 0 <= new_r < self.rows and 0 <= new_c < self.cols:
-                neighbor = self.grid[new_r][new_c]
-                
-                # Check if not a wall or dynamic obstacle
-                if neighbor.node_type not in ['wall', 'dynamic_obstacle']:
-                    neighbors.append(neighbor)
-        
-        return neighbors
-    
-    def get_node(self, row, col):
-        """Get node at specific position"""
-        if 0 <= row < self.rows and 0 <= col < self.cols:
-            return self.grid[row][col]
-        return None
-    
-    def is_valid_position(self, row, col):
-        """Check if position is valid and traversable"""
-        if 0 <= row < self.rows and 0 <= col < self.cols:
-            node = self.grid[row][col]
-            return node.node_type not in ['wall', 'dynamic_obstacle']
-        return False
-    
-    def reset_search_states(self):
-        """Reset all nodes for a new search"""
-        for r in range(self.rows):
-            for c in range(self.cols):
-                self.grid[r][c].reset_search_state()
-        
-        # Reset start node cost
-        if self.start:
-            self.grid[self.start[0]][self.start[1]].g_cost = 0
-    
-    def clear_dynamic_obstacles(self):
-        """Clear all dynamic obstacles"""
-        for r, c in self.dynamic_obstacles:
-            if self.grid[r][c].node_type == 'dynamic_obstacle':
-                self.grid[r][c].node_type = 'empty'
-        self.dynamic_obstacles = []
-    
-    def reconstruct_path(self, end_node):
-        """Reconstruct path from start to end using parent pointers"""
-        path = []
-        current = end_node
-        
-        while current is not None:
-            path.append(current)
-            current = current.parent
-        
-        path.reverse()
-        return path
-    
-    def get_cost(self, from_node, to_node):
-        """Get cost of moving from one node to another"""
-        # Diagonal movement costs more (approximately sqrt(2) ≈ 1.414)
-        if abs(from_node.row - to_node.row) == 1 and abs(from_node.col - to_node.col) == 1:
-            return 1.414
-        else:
-            return 1.0
+        self.start_node:  Node | None = None
+        self.target_node: Node | None = None
+
+        self._set_default_endpoints()
+
+    # ── Internal helpers 
+
+    def _set_default_endpoints(self):
+        # Start on the left side, target on the right, both on the middle row
+        mid_r = self.rows // 2
+        self.set_start(mid_r, 3)
+        self.set_target(mid_r, self.cols - 4)
+
+    def _in_bounds(self, r: int, c: int) -> bool:
+        return 0 <= r < self.rows and 0 <= c < self.cols
+
+    # ── Public accessors 
+
+    def node(self, r: int, c: int) -> Node:
+        return self._cells[r][c]
+
+    def all_nodes(self):
+        """Iterate every node left-to-right, top-to-bottom."""
+        for row in self._cells:
+            yield from row
+
+    # ── Endpoint setters 
+
+    def set_start(self, r: int, c: int):
+        # Clear the old start cell before moving it
+        if self.start_node:
+            self.start_node.state = "empty"
+        self.start_node = self._cells[r][c]
+        self.start_node.state = "start"
+        self.start_node.is_wall = False
+        self.start_node.is_dynamic = False
+
+    def set_target(self, r: int, c: int):
+        if self.target_node:
+            self.target_node.state = "empty"
+        self.target_node = self._cells[r][c]
+        self.target_node.state = "target"
+        self.target_node.is_wall = False
+        self.target_node.is_dynamic = False
+
+    # ── Wall management 
+
+    def toggle_wall(self, r: int, c: int):
+        nd = self._cells[r][c]
+        if nd is self.start_node or nd is self.target_node:
+            return  # never wall over an endpoint
+        nd.mark_wall(not nd.is_wall)
+
+    def place_wall(self, r: int, c: int):
+        nd = self._cells[r][c]
+        if nd is self.start_node or nd is self.target_node:
+            return
+        nd.mark_wall(True)
+
+    def erase_wall(self, r: int, c: int):
+        self._cells[r][c].mark_wall(False)
+
+    # ── Weight management 
+
+    def set_weight(self, r: int, c: int, w: int):
+        """Set traversal cost (1–10). Walls and endpoints are unaffected."""
+        nd = self._cells[r][c]
+        if nd.is_wall or nd is self.start_node or nd is self.target_node:
+            return
+        nd.weight = max(1, min(10, w))
+
+    # ── Neighbour expansion 
+
+    def neighbours(self, node: Node) -> list[Node]:
+        """Return walkable neighbours in the clockwise order defined by DIRECTIONS."""
+        result = []
+        for dr, dc in DIRECTIONS:
+            nr, nc = node.row + dr, node.col + dc
+            if not self._in_bounds(nr, nc):
+                continue
+            nb = self._cells[nr][nc]
+            if not nb.blocked:
+                result.append(nb)
+        return result
+
+    def neighbours_pos(self, pos: tuple) -> list[tuple]:
+        """Same as neighbours() but returns (row, col) tuples instead of Node objects."""
+        r, c = pos
+        result = []
+        for dr, dc in DIRECTIONS:
+            nr, nc = r + dr, c + dc
+            if not self._in_bounds(nr, nc):
+                continue
+            nb = self._cells[nr][nc]
+            if not nb.blocked:
+                result.append((nr, nc))
+        return result
+
+    # ── Reset 
+
+    def reset_search(self):
+        """Clear frontier / explored / path state. Walls and weights are preserved."""
+        for nd in self.all_nodes():
+            nd.reset_search_state()
+        # reset_search_state wipes the state string, so re-apply endpoint colours
+        if self.start_node:
+            self.start_node.state = "start"
+        if self.target_node:
+            self.target_node.state = "target"
+
+    def full_reset(self):
+        """Wipe everything — walls, weights, endpoints — back to a blank grid."""
+        for nd in self.all_nodes():
+            nd.is_wall    = False
+            nd.is_dynamic = False
+            nd.weight     = 1
+            nd.state      = "empty"
+        self.start_node  = None
+        self.target_node = None
+        self._set_default_endpoints()
+
+    def __repr__(self) -> str:
+        return f"Grid({self.rows}×{self.cols})"
